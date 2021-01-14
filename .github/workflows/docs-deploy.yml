@@ -1,0 +1,56 @@
+name: Build and release Surrortg docs
+
+on:
+  push:
+    branches: [dev]
+    
+  workflow_dispatch:
+
+jobs:
+  aws-docs-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Setup Python 3.7
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.7'
+      
+      - name: Configure parameters
+        id: params
+        run: |
+          export BRANCH_NAME=${GITHUB_REF##*/}
+          echo "::set-output name=DOMAIN_KEY::${BRANCH_NAME}_DOCS_DOMAIN"
+          echo "::set-output name=BUCKET_NAME::${BRANCH_NAME}-surrortg-sdk-docs"
+          echo "::set-output name=STACK_NAME::${BRANCH_NAME}-surrortg-sdk-docs"
+      
+      - name: Configure AWS credentials
+        id: creds
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: 'eu-west-1'
+
+      - name: Deploy S3 Bucket
+        id: s3-deploy
+        uses: aws-actions/aws-cloudformation-github-deploy@v1
+        with:
+          name: ${{ steps.params.outputs.STACK_NAME }}
+          template: s3-docs.yml
+          no-fail-on-empty-changeset: "1"
+          parameter-overrides: >-
+            s3BucketName=${{ steps.params.outputs.BUCKET_NAME }},
+            docsCfAlias=${{ secrets[steps.params.outputs.DOMAIN_KEY] }},
+            certificateArn=${{ secrets.CERTIFICATE_ARN }}
+
+      - name: Build and upload docs to S3
+        id: s3-upload
+        run: |
+          pip install pipenv
+          pipenv sync --dev
+          pipenv run docs
+          aws s3 sync ./docs/build/html s3://${{ steps.params.outputs.BUCKET_NAME }} --delete
